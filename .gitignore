@@ -1,6 +1,7 @@
 # Ignore virtual environments
 .venv/
 .XSlicer_API/.venv
+downloads/
 
 # Ignore Python cache
 __pycache__/
