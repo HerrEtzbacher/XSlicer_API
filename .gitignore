@@ -1,0 +1,13 @@
+# Ignore virtual environments
+.venv/
+.XSlicer_API/.venv
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore environment / IDE configs
+.env
+.vscode/
+.idea/
