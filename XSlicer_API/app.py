@@ -69,6 +69,7 @@ def process_link(link: str = Query(..., description="URL to process")):
         artist = info_dict.get("uploader", "UnknownArtist")
         upload_date = info_dict.get("upload_date", None)
         duration = info_dict.get("duration", None)
+        thumbnail = info_dict.get("thumbnail", None)
 
     audio_file = os.path.splitext(filename)[0] + ".mp3"
 
@@ -93,7 +94,8 @@ def process_link(link: str = Query(..., description="URL to process")):
         "link": link,
         "analyzed_at": datetime.utcnow().isoformat(),
         "rhythm_analysis": rhythm_data,
-        "file_path": dest_audio_path
+        "file_path": dest_audio_path,
+        "thumbnail": thumbnail
     }
 
     metadata_path = os.path.join(song_dir, "metadata.json")
