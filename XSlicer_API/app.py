@@ -8,8 +8,20 @@ import numpy as np
 import json
 from datetime import datetime
 from typing import List
+from sqlalchemy import select
+from pydantic import BaseModel
+from db import get_db
+from models import GameStat
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends
 
 app = FastAPI()
+
+class GameStatCreate(BaseModel):
+    player_id: str
+    score: int
+    level: int
+    time_played: float
 
 ffmpeg_path = shutil.which("ffmpeg") or os.getenv("FFMPEG_PATH")
 if ffmpeg_path is None:
@@ -155,3 +167,24 @@ def get_song_file(song_id: str):
                     if os.path.exists(mp3_path):
                         return FileResponse(mp3_path, media_type="audio/mpeg", filename=os.path.basename(mp3_path))
     raise HTTPException(status_code=404, detail=f"Audio file for '{song_id}' not found.")
+
+@app.post("/stats/")
+async def save_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
+    new_stat = GameStat(
+        player_id=stat.player_id,
+        score=stat.score,
+        level=stat.level,
+        time_played=stat.time_played,
+    )
+    db.add(new_stat)
+    await db.commit()
+    await db.refresh(new_stat)
+    return {"status": "ok", "id": new_stat.id}
+
+@app.get("/stats/{player_id}")
+async def get_stats(player_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GameStat).where(GameStat.player_id == player_id)
+    )
+    stats = result.scalars().all()
+    return stats

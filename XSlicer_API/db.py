@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost/game_db"  
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost/xslicer_db"  
 
 engine = create_async_engine(DATABASE_URL, echo=True)
 
