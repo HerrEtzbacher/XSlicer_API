@@ -188,3 +188,35 @@ async def get_stats(player_id: str, db: AsyncSession = Depends(get_db)):
     )
     stats = result.scalars().all()
     return stats
+
+@app.post("/stats", response_model=None)
+async def create_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Adds a new game statistic entry to the database.
+    """
+    try:
+        new_stat = GameStat(
+            player_id=stat.player_id,
+            score=stat.score,
+            level=stat.level,
+            time_played=stat.time_played,
+        )
+        
+        db.add(new_stat)
+        await db.commit()
+        await db.refresh(new_stat)  
+        
+        return {
+            "status": "success",
+            "data": {
+                "id": new_stat.id,
+                "player_id": new_stat.player_id,
+                "score": new_stat.score,
+                "level": new_stat.level,
+                "time_played": new_stat.time_played,
+                "created_at": new_stat.created_at
+            }
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

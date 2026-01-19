@@ -11,5 +11,5 @@ class GameStat(Base):
     player_id = Column(String, index=True)
     score = Column(Integer)
     level = Column(Integer)
-    time_played = Column(Float)  # seconds
+    time_played = Column(Float)  
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
