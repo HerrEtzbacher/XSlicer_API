@@ -21,6 +21,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+from sqlalchemy import select
+from pydantic import BaseModel
+from db import get_db
+from models import GameStat
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends
+
+app = FastAPI()
+
+class GameStatCreate(BaseModel):
+    player_id: str
+    score: int
+    level: int
+    time_played: float
 
 ffmpeg_path = shutil.which("ffmpeg") or os.getenv("FFMPEG_PATH")
 if ffmpeg_path is None:
@@ -80,6 +94,7 @@ def process_link(link: str = Query(..., description="URL to process")):
         artist = info_dict.get("uploader", "UnknownArtist")
         upload_date = info_dict.get("upload_date", None)
         duration = info_dict.get("duration", None)
+        thumbnail = info_dict.get("thumbnail", None)
 
     audio_file = os.path.splitext(filename)[0] + ".mp3"
 
@@ -104,7 +119,8 @@ def process_link(link: str = Query(..., description="URL to process")):
         "link": link,
         "analyzed_at": datetime.utcnow().isoformat(),
         "rhythm_analysis": rhythm_data,
-        "file_path": dest_audio_path
+        "file_path": dest_audio_path,
+        "thumbnail": thumbnail
     }
 
     metadata_path = os.path.join(song_dir, "metadata.json")
@@ -208,3 +224,23 @@ async def proxy_image(url: str):
     return StreamingResponse(io.BytesIO(response.content), media_type="image/jpeg")
 
 
+@app.post("/stats/")
+async def save_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
+    new_stat = GameStat(
+        player_id=stat.player_id,
+        score=stat.score,
+        level=stat.level,
+        time_played=stat.time_played,
+    )
+    db.add(new_stat)
+    await db.commit()
+    await db.refresh(new_stat)
+    return {"status": "ok", "id": new_stat.id}
+
+@app.get("/stats/{player_id}")
+async def get_stats(player_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GameStat).where(GameStat.player_id == player_id)
+    )
+    stats = result.scalars().all()
+    return stats
