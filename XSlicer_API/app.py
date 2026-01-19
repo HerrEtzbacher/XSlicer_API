@@ -8,6 +8,19 @@ import numpy as np
 import json
 from datetime import datetime
 from typing import List
+import requests
+from fastapi.responses import StreamingResponse
+import io
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 from sqlalchemy import select
 from pydantic import BaseModel
 from db import get_db
@@ -168,18 +181,47 @@ def get_song_file(song_id: str):
                         return FileResponse(mp3_path, media_type="audio/mpeg", filename=os.path.basename(mp3_path))
     raise HTTPException(status_code=404, detail=f"Audio file for '{song_id}' not found.")
 
-@app.post("/stats/")
-async def save_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
-    new_stat = GameStat(
-        player_id=stat.player_id,
-        score=stat.score,
-        level=stat.level,
-        time_played=stat.time_played,
-    )
-    db.add(new_stat)
-    await db.commit()
-    await db.refresh(new_stat)
-    return {"status": "ok", "id": new_stat.id}
+@app.get("/get_metadata")
+def get_metadata_only(link: str = Query(..., description="YouTube URL to fetch metadata from")):
+
+    metadata_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(metadata_opts) as ydl:
+
+            info_dict = ydl.extract_info(link, download=False)
+
+            metadata = {
+                "id": info_dict.get("id", "UnknownID"),
+                "title": info_dict.get("title", "Unknown Title"),
+                "artist": info_dict.get("uploader", "Unknown Artist"),
+                "duration": info_dict.get("duration", 0),
+                "thumbnail_url": info_dict.get("thumbnail"),
+                "upload_date": info_dict.get("upload_date", ""),
+                "link": link,
+                "analyzed_at": None, 
+                "rhythm_analysis": None,
+                "file_path": None
+            }
+
+            return {
+                "message": "Metadata fetched successfully.",
+                "metadata": metadata
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch metadata: {str(e)}")
+    
+@app.get("/proxy_image")
+async def proxy_image(url: str):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    response = requests.get(url, headers=headers, timeout=5)
+    return StreamingResponse(io.BytesIO(response.content), media_type="image/jpeg")
 
 @app.get("/stats/{player_id}")
 async def get_stats(player_id: str, db: AsyncSession = Depends(get_db)):
