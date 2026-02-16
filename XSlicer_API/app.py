@@ -209,9 +209,6 @@ def get_metadata_only(link: str = Query(..., description="YouTube URL to fetch m
             }
             
     except Exception as e:
-<<<<<<< HEAD
-        raise HTTPException(status_code=400, detail=f"Failed to fetch metadata: {str(e)}")
-=======
         raise HTTPException(status_code=400, detail=f"Failed to fetch metadata: {str(e)}")
     
 @app.get("/proxy_image")
@@ -471,4 +468,3 @@ async def update_credits(user_id: int, amount: int, db: Session = Depends(get_db
 
     return {"message": "Guthaben erfolgreich aktualisiert", "delta": amount}
 
->>>>>>> cdc7e14b8fe896be48a08bfb2d3bc25be0fac7cf
