@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from typing import List
 from models import Sword 
+from models import user_swords
 import requests
 from fastapi.responses import StreamingResponse
 import io
@@ -35,6 +36,7 @@ from db import get_db
 from models import GameStat
 from models import GameSong
 from models import GameUser
+from models import Sword
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
@@ -60,9 +62,14 @@ class SwordBase(BaseModel):
     class Config:
         orm_mode = True
 
-class AddSwordRequest(BaseModel):
+class BuySwordRequest(BaseModel):
     user_id: int
     sword_id: int
+
+class AddSwordRequest(BaseModel):
+    name: str
+    cost: int
+
 
 ffmpeg_path = shutil.which("ffmpeg") or os.getenv("FFMPEG_PATH")
 if ffmpeg_path is None:
@@ -388,7 +395,7 @@ async def get_specific_stats(player_id: str, level: int, db: AsyncSession = Depe
     return stats
 
 @app.post("/users/buy_sword")
-async def buy_sword(request: AddSwordRequest, db: AsyncSession = Depends(get_db)):
+async def buy_sword(request: BuySwordRequest, db: AsyncSession = Depends(get_db)):
     sword_query = await db.execute(select(Sword).where(Sword.id == request.sword_id))
     sword = sword_query.scalars().first()
     
@@ -396,8 +403,6 @@ async def buy_sword(request: AddSwordRequest, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="Schwert nicht gefunden")
 
     try:
-        # 2. Credits abziehen (Atomic Update mit Check auf >= 0)
-        # Wir ziehen den Preis ab (daher: -sword.price)
         credit_stmt = (
             update(GameUser)
             .where(GameUser.id == request.user_id)
@@ -437,38 +442,54 @@ async def buy_sword(request: AddSwordRequest, db: AsyncSession = Depends(get_db)
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Datenbankfehler: {str(e)}")
     
-@app.post("/users/add_sword")
-async def add_sword_for_user(request: AddSwordRequest, db: AsyncSession = Depends(get_db)):
-    user_query = await db.execute(select(GameUser).where(GameUser.id == request.user_id))
-    user = user_query.scalars().first()
-    
-    from models import Sword
-    sword_query = await db.execute(select(Sword).where(Sword.id == request.sword_id))
-    sword = sword_query.scalars().first()
-    
-    if not user or not sword:
-        raise HTTPException(status_code=404, detail="User oder Schwert nicht gefunden")
-    
-    from models import user_swords
-    try:
-        check_query = select(user_swords).where(
-            and_(user_swords.c.user_id == user.id, user_swords.c.sword_id == sword.id)
-        )
-        existing = await db.execute(check_query)
-        if existing.first():
-            return {"message": "User besitzt dieses Schwert bereits"}
+@app.get("/swords")
+async def get_swords(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Sword).where(True)
+    )
+    swords = result.scalars().all()
+    return swords
 
-        await db.execute(insert(user_swords).values(user_id=user.id, sword_id=sword.id))
-        await db.commit()
-        
-        return {"status": "success", "message": f"Schwert '{sword.name}' wurde {user.username} hinzugefügt."}
+@app.get("/user/{user_id}/swords")
+async def get_swords_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    tables = await db.execute(
+        select(user_swords).where(user_swords.user_id == user_id)
+    )
+    for table in tables:
+        result += await db.execute(
+            select(Sword).where(Sword.id == table.id)
+        )   
+    swords = result.scalars().all()
+    return swords
     
+@app.post("/add_sword")
+async def add_sword(request: AddSwordRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        new_stat = Sword(
+            name=request.name,
+            price=request.cost,
+        )
+        
+        db.add(new_stat)
+        await db.commit()
+        await db.refresh(new_stat)  
+        
+        return {
+            "status": "success",
+            "data": {
+                "id": new_stat.id,
+                "name": new_stat.name,
+                "cost": new_stat.price,
+            }
+        }
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     
+    
+    
 @app.patch("/users/{user_id}/credits")
-def update_credits(user_id: int, amount: int, db: Session = Depends(get_db)):
+async def update_credits(user_id: int, amount: int, db: Session = Depends(get_db)):
   
     stmt = (
         update(GameUser)
@@ -477,8 +498,8 @@ def update_credits(user_id: int, amount: int, db: Session = Depends(get_db)):
         .values(credit=GameUser.credit + amount)
     )
     
-    result = db.execute(stmt)
-    db.commit()
+    result = await db.execute(stmt)
+    await db.commit()
 
     if result.rowcount == 0:
         raise HTTPException(
