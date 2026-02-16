@@ -8,10 +8,18 @@ import numpy as np
 import json
 from datetime import datetime
 from typing import List
+from models import Sword 
 import requests
 from fastapi.responses import StreamingResponse
 import io
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select, and_
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy import update, and_
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, insert, and_
 
 app = FastAPI()
 
@@ -25,6 +33,8 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from db import get_db
 from models import GameStat
+from models import GameSong
+from models import GameUser
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
@@ -35,6 +45,24 @@ class GameStatCreate(BaseModel):
     score: int
     level: int
     time_played: float
+
+class GameSongCreate(BaseModel):
+    url: str
+
+class GameUserCreate(BaseModel):
+    username: str
+    password: str
+
+class SwordBase(BaseModel):
+    name: str
+    price: float
+
+    class Config:
+        orm_mode = True
+
+class AddSwordRequest(BaseModel):
+    user_id: int
+    sword_id: int
 
 ffmpeg_path = shutil.which("ffmpeg") or os.getenv("FFMPEG_PATH")
 if ffmpeg_path is None:
@@ -231,6 +259,86 @@ async def get_stats(player_id: str, db: AsyncSession = Depends(get_db)):
     stats = result.scalars().all()
     return stats
 
+@app.post("/song", response_model=None)
+async def create_song(song: GameSongCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Adds a new game statistic entry to the database.
+    """
+    try:
+        new_stat = GameSong(
+            url=song.url,
+        )
+        
+        db.add(new_stat)
+        await db.commit()
+        await db.refresh(new_stat)  
+        
+        return {
+            "status": "success",
+            "data": {
+                "id": new_stat.id,
+                "url": new_stat.url
+            }
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/songs")
+async def get_songs(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GameSong)
+    )
+    songs = result.scalars().all()
+    return songs
+    
+@app.post("/user", response_model=None)
+async def create_user(user: GameUserCreate, db: AsyncSession = Depends(get_db)):
+    try:
+        query = select(GameUser).where(GameUser.username == user.username)
+        result = await db.execute(query)
+        existing_user = result.scalars().first()
+
+        if existing_user:
+            raise HTTPException(
+                status_code=400, 
+                detail="Benutzername bereits vergeben"
+            )
+
+        new_stat = GameUser(
+            username=user.username,
+            password=user.password, 
+            credit = 0,
+        )
+        
+        db.add(new_stat)
+        await db.commit()
+        await db.refresh(new_stat)  
+        
+        return {
+            "status": "success",
+            "data": {
+                "id": new_stat.id,
+                "username": new_stat.username
+            }
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/users")
+async def get_users(username: str, password: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(GameUser).where(
+            and_(GameUser.username == username, GameUser.password == password)
+        )
+    )
+    stats = result.scalars().all()
+    return stats
+
+
 @app.post("/stats", response_model=None)
 async def create_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
     """
@@ -262,3 +370,121 @@ async def create_stat(stat: GameStatCreate, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/stats/filter")
+async def get_specific_stats(player_id: str, level: int, db: AsyncSession = Depends(get_db)):
+    """
+    Gibt Statistiken zurück, die exakt zu player_id UND level passen.
+    """
+    query = select(GameStat).where(
+        and_(
+            GameStat.player_id == player_id,
+            GameStat.level == level
+        )
+    )
+    
+    result = await db.execute(query)
+    stats = result.scalars().all()
+    return stats
+
+@app.post("/users/buy_sword")
+async def buy_sword(request: AddSwordRequest, db: AsyncSession = Depends(get_db)):
+    sword_query = await db.execute(select(Sword).where(Sword.id == request.sword_id))
+    sword = sword_query.scalars().first()
+    
+    if not sword:
+        raise HTTPException(status_code=404, detail="Schwert nicht gefunden")
+
+    try:
+        # 2. Credits abziehen (Atomic Update mit Check auf >= 0)
+        # Wir ziehen den Preis ab (daher: -sword.price)
+        credit_stmt = (
+            update(GameUser)
+            .where(GameUser.id == request.user_id)
+            .where(GameUser.credit >= sword.price)
+            .values(credit=GameUser.credit - sword.price)
+        )
+        
+        result = await db.execute(credit_stmt)
+        
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=400, 
+                detail="Kauf fehlgeschlagen: User nicht gefunden oder zu wenig Credits"
+            )
+
+        check_query = select(user_swords).where(
+            and_(user_swords.c.user_id == request.user_id, user_swords.c.sword_id == sword.id)
+        )
+        existing = await db.execute(check_query)
+        if existing.first():
+            await db.rollback()
+            return {"message": "User besitzt dieses Schwert bereits"}
+
+        await db.execute(
+            insert(user_swords).values(user_id=request.user_id, sword_id=sword.id)
+        )
+
+        await db.commit()
+        return {
+            "status": "success", 
+            "message": f"'{sword.name}' gekauft für {sword.price} Credits."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Datenbankfehler: {str(e)}")
+    
+@app.post("/users/add_sword")
+async def add_sword_for_user(request: AddSwordRequest, db: AsyncSession = Depends(get_db)):
+    user_query = await db.execute(select(GameUser).where(GameUser.id == request.user_id))
+    user = user_query.scalars().first()
+    
+    from models import Sword
+    sword_query = await db.execute(select(Sword).where(Sword.id == request.sword_id))
+    sword = sword_query.scalars().first()
+    
+    if not user or not sword:
+        raise HTTPException(status_code=404, detail="User oder Schwert nicht gefunden")
+    
+    from models import user_swords
+    try:
+        check_query = select(user_swords).where(
+            and_(user_swords.c.user_id == user.id, user_swords.c.sword_id == sword.id)
+        )
+        existing = await db.execute(check_query)
+        if existing.first():
+            return {"message": "User besitzt dieses Schwert bereits"}
+
+        await db.execute(insert(user_swords).values(user_id=user.id, sword_id=sword.id))
+        await db.commit()
+        
+        return {"status": "success", "message": f"Schwert '{sword.name}' wurde {user.username} hinzugefügt."}
+    
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.patch("/users/{user_id}/credits")
+def update_credits(user_id: int, amount: int, db: Session = Depends(get_db)):
+  
+    stmt = (
+        update(GameUser)
+        .where(GameUser.id == user_id)
+        .where((GameUser.credit + amount) >= 0)
+        .values(credit=GameUser.credit + amount)
+    )
+    
+    result = db.execute(stmt)
+    db.commit()
+
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transaktion abgelehnt: User nicht gefunden oder unzureichendes Guthaben."
+        )
+
+    return {"message": "Guthaben erfolgreich aktualisiert", "delta": amount}
+
