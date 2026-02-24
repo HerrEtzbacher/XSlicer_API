@@ -452,13 +452,9 @@ async def get_swords(db: AsyncSession = Depends(get_db)):
 
 @app.get("/user/{user_id}/swords")
 async def get_swords_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    tables = await db.execute(
-        select(user_swords).where(user_swords.user_id == user_id)
+    result = await db.execute(
+        select(Sword).join(user_swords, Sword.id == user_swords.c.sword_id).where(user_swords.c.user_id == user_id)
     )
-    for table in tables:
-        result += await db.execute(
-            select(Sword).where(Sword.id == table.id)
-        )   
     swords = result.scalars().all()
     return swords
     
