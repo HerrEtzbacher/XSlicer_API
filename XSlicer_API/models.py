@@ -46,6 +46,5 @@ class Sword(Base):
     name = Column(String)
     price = Column(Float)
 
-    # Relationship: Ermöglicht den Zugriff auf Besitzer via sword.owners
     owners = relationship("GameUser", secondary=user_swords, back_populates="swords")
 
